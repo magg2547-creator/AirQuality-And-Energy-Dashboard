@@ -1,23 +1,36 @@
 'use strict';
 
+const LAYOUT_MEDIA = window.matchMedia('(max-width: 720px)');
+
 const state = {
   data:         [],
   liveUrl:      CONFIG.appsScriptUrl,
   filter:       { search: '', status: '' },
   isFetching:   false,
   isPreview:    false,
-  chartCompact: window.matchMedia('(max-width: 720px)').matches,
+  recordsCompact: LAYOUT_MEDIA.matches,
   visibleHours: 24,
 };
+
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+const FILTER_FIELDS = Object.freeze(['timestamp', 'pm25', 'pm10', 'co2', 'power', 'status']);
 
 const DOM = (() => {
   const byId = id => document.getElementById(id);
   return {
+    pageShell:         document.querySelector('.page-shell'),
     urlInput:          byId('appsScriptUrl'),
     fetchLiveBtn:      byId('fetchLiveBtn'),
     exportBtn:         byId('exportBtn'),
     refreshBtn:        byId('refreshBtn'),
     retryBtn:          byId('retryBtn'),
+    emptyStateConnectBtn: byId('emptyStateConnectBtn'),
     settingsMenu:      byId('settingsMenu'),
     rangeButtons:      document.querySelectorAll('.range-btn'),
     loadingState:      byId('loadingState'),
@@ -28,11 +41,8 @@ const DOM = (() => {
     lastUpdated:       byId('lastUpdated'),
     statusDot:         document.querySelector('#statusChip .status-dot'),
     statusChipLabel:   byId('statusChipLabel'),
-    sourceBanner:      byId('sourceBanner'),
-    sourceBannerKicker: byId('sourceBannerKicker'),
-    sourceBannerTitle: byId('sourceBannerTitle'),
-    sourceBannerText:  byId('sourceBannerText'),
     connectSourceBtn:  byId('connectSourceBtn'),
+    heroStatePill:     byId('heroStatePill'),
     heroHeading:       byId('heroHeading'),
     heroSummary:       byId('heroSummary'),
     heroRecordCount:   byId('heroRecordCount'),
@@ -62,8 +72,8 @@ const SUPPORTING_CARD_DEFS = CARD_DEFS.filter(def => !def.priority);
 const METRIC_DEF_MAP = new Map(CARD_DEFS.map(def => [def.key, def]));
 const SEVERITY_WEIGHT = Object.freeze({ stable: 0, warning: 1, critical: 2 });
 
-let resizeTimer = 0;
 let chartRenderFrame = 0;
+let recordsRenderFrame = 0;
 
 DOM.urlInput.addEventListener('input', () => {
   DOM.urlInput.setCustomValidity('');
@@ -94,6 +104,7 @@ DOM.fetchLiveBtn.addEventListener('click', () => {
 DOM.refreshBtn.addEventListener('click', loadData);
 DOM.retryBtn.addEventListener('click', loadData);
 DOM.connectSourceBtn.addEventListener('click', openSettingsMenu);
+DOM.emptyStateConnectBtn.addEventListener('click', openSettingsMenu);
 
 DOM.rangeButtons.forEach(button => {
   button.addEventListener('click', () => {
@@ -116,30 +127,34 @@ DOM.exportBtn.addEventListener('click', () => {
 
 DOM.tableSearch.addEventListener('input', event => {
   state.filter.search = event.target.value;
-  renderTable(getVisibleData(state.data));
+  scheduleRecordRender(getVisibleData(state.data));
 });
 
 DOM.statusFilter.addEventListener('change', event => {
   state.filter.status = event.target.value;
-  renderTable(getVisibleData(state.data));
+  scheduleRecordRender(getVisibleData(state.data));
 });
 
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(() => {
-    const compact = window.matchMedia('(max-width: 720px)').matches;
-    if (compact !== state.chartCompact) {
-      state.chartCompact = compact;
-      scheduleChartRender(getVisibleData(state.data));
-    }
-  }, 120);
+bindMediaChange(LAYOUT_MEDIA, event => {
+  state.recordsCompact = event.matches;
+  const visible = getVisibleData(state.data);
+  scheduleChartRender(visible);
+  scheduleRecordRender(visible);
 });
 
 async function loadData() {
   if (state.isFetching) return;
 
   if (!state.liveUrl) {
-    loadPreviewData();
+    if (CONFIG.previewOnNoSource) {
+      loadPreviewData();
+    } else {
+      state.isPreview = false;
+      state.data = [];
+      setBusyState(false);
+      setUIState('empty');
+      setStatusChip('warning', 'Awaiting source');
+    }
     return;
   }
 
@@ -217,9 +232,13 @@ function normaliseRecord(record) {
 
   const timestamp = String(record.timestamp || record.time || record.Time || '').trim();
   if (!timestamp) return null;
+  const parsedDate = new Date(timestamp.replace(' ', 'T'));
+  const dateMs = parsedDate.getTime();
+  if (Number.isNaN(dateMs)) return null;
 
   return {
     timestamp,
+    dateMs,
     pm25:        safeNum(record.pm25, 0),
     pm10:        safeNum(record.pm10, 0),
     temperature: safeNum(record.temperature ?? record.temp, 0),
@@ -236,14 +255,18 @@ function normaliseRecord(record) {
 }
 
 function normalise(records) {
-  return records.map(normaliseRecord).filter(Boolean);
+  return records
+    .map(normaliseRecord)
+    .filter(Boolean)
+    .sort((left, right) => left.dateMs - right.dateMs);
 }
 
 function setUIState(next) {
-  DOM.loadingState.style.display = next === 'loading' ? 'flex' : 'none';
-  DOM.errorState.style.display = next === 'error' ? 'flex' : 'none';
-  DOM.emptyState.style.display = next === 'empty' ? 'flex' : 'none';
-  DOM.dashContent.style.display = next === 'ok' ? 'grid' : 'none';
+  DOM.pageShell.dataset.view = next;
+  DOM.loadingState.hidden = next !== 'loading';
+  DOM.errorState.hidden = next !== 'error';
+  DOM.emptyState.hidden = next !== 'empty';
+  DOM.dashContent.hidden = next !== 'ok';
 }
 
 function setUIStateError(message) {
@@ -274,6 +297,7 @@ function renderDashboard(data) {
   const visible = getVisibleData(data);
   const latest = visible.length ? visible[visible.length - 1] : null;
   const alerts = buildAlertItems(latest);
+  const tone = getDashboardTone(latest, alerts);
   const voltageDef = getMetricDef('voltage');
   const currentDef = getMetricDef('current');
   const energyDef = getMetricDef('energy');
@@ -281,7 +305,7 @@ function renderDashboard(data) {
   const humidityDef = getMetricDef('humidity');
 
   DOM.lastUpdated.textContent = latest
-    ? `Last updated ${formatShortTime(latest.timestamp)}`
+    ? `Last updated ${formatShortTime(latest)}`
     : 'Last updated --';
   DOM.pmMetric.textContent = latest
     ? `${formatMetricValue(latest.pm25, getMetricDef('pm25'))} / ${formatMetricValue(latest.pm10, getMetricDef('pm10'))} ug/m3`
@@ -299,13 +323,13 @@ function renderDashboard(data) {
     ? `Peak ${formatMetricValue(maxOf(visible, 'power'), getMetricDef('power'))} W | ${formatMetricValue(latest.energy, energyDef)} kWh`
     : 'Energy -- kWh';
 
-  renderSourceBanner();
+  renderHeroState(tone);
   renderHero(visible, latest, alerts);
   renderPriorityCards(visible, latest);
   renderOverviewCards(visible, latest);
   renderAlerts(visible, alerts);
-  renderStatusChip(latest, alerts);
-  renderTable(visible);
+  renderStatusChip(tone);
+  scheduleRecordRender(visible);
   scheduleChartRender(visible);
 }
 
@@ -381,15 +405,15 @@ function renderHero(data, latest, alerts) {
 function getHeroCopy(latest, alerts, dominantAlert) {
   if (state.isPreview) {
     return {
-      heading: 'Interactive preview is active',
-      summary: 'Sample readings are populating the dashboard so layout, spacing, and responsive behavior can be refined before the live Apps Script source is attached.',
+      heading: 'Preview data keeps the dashboard live',
+      summary: 'Connect your Apps Script source when you are ready to switch to live readings.',
     };
   }
 
   if (!latest) {
     return {
       heading: 'Waiting for live data',
-      summary: 'Connect a data source to see the latest indoor conditions, alert pressure, and load trends.',
+      summary: 'Connect a source to begin live monitoring.',
     };
   }
 
@@ -399,33 +423,47 @@ function getHeroCopy(latest, alerts, dominantAlert) {
   if (criticalCount) {
     return {
       heading: 'Critical conditions need attention',
-      summary: `${criticalCount} critical threshold breach${criticalCount === 1 ? '' : 'es'} detected. ${dominantAlert.label} is the main pressure point right now.`,
+      summary: `${criticalCount} critical metric${criticalCount === 1 ? '' : 's'} exceeded the limit. ${dominantAlert.label} is the main pressure point.`,
     };
   }
 
   if (warningCount) {
     return {
       heading: 'Conditions are above normal',
-      summary: `${warningCount} metric${warningCount === 1 ? '' : 's'} are above warning level. Watch ${dominantAlert.label} and confirm the short-term trend below.`,
+      summary: `${warningCount} metric${warningCount === 1 ? '' : 's'} are elevated. Watch ${dominantAlert.label} and confirm the short-term trend.`,
     };
   }
 
   return {
     heading: 'Environment is stable',
-    summary: `No active threshold breaches across the selected ${state.visibleHours}h range. Use the charts below to confirm the trend.`,
+    summary: `All tracked metrics are within threshold across the selected ${state.visibleHours}h window.`,
   };
 }
 
-function renderSourceBanner() {
+function getDashboardTone(latest, alerts) {
   if (state.isPreview) {
-    DOM.sourceBanner.style.display = 'flex';
-    DOM.sourceBannerKicker.textContent = 'Preview mode';
-    DOM.sourceBannerTitle.textContent = 'Sample data is active until the live feed is connected';
-    DOM.sourceBannerText.textContent = 'Open Settings and paste your Apps Script URL whenever you want to switch this page to live sensor data.';
-    return;
+    return { level: 'preview', heroLabel: 'Preview dataset', chipLabel: 'Preview feed', showSourceAction: true };
   }
 
-  DOM.sourceBanner.style.display = 'none';
+  if (!latest) {
+    return { level: 'warning', heroLabel: 'Source required', chipLabel: 'Awaiting source', showSourceAction: true };
+  }
+
+  if (alerts.some(item => item.level === 'critical') || latest.status === 'critical') {
+    return { level: 'critical', heroLabel: 'Critical now', chipLabel: 'Critical now', showSourceAction: false };
+  }
+
+  if (alerts.length || latest.status === 'warning') {
+    return { level: 'warning', heroLabel: 'Watch conditions', chipLabel: 'Watch conditions', showSourceAction: false };
+  }
+
+  return { level: 'live', heroLabel: 'Live feed', chipLabel: 'Stable now', showSourceAction: false };
+}
+
+function renderHeroState(tone) {
+  DOM.heroStatePill.className = `hero-state-pill hero-state-pill--${tone.level}`;
+  DOM.heroStatePill.textContent = tone.heroLabel;
+  DOM.connectSourceBtn.hidden = !tone.showSourceAction;
 }
 
 function renderPriorityCards(data, latest) {
@@ -519,13 +557,13 @@ function buildAlertItems(latest) {
 
 function renderAlerts(data, alerts) {
   if (!alerts.length) {
-    DOM.alertSection.style.display = 'none';
+    DOM.alertSection.hidden = true;
     DOM.alertList.innerHTML = '';
     return;
   }
 
   const activeRecords = data.filter(record => record.status !== 'normal').length;
-  DOM.alertSection.style.display = 'grid';
+  DOM.alertSection.hidden = false;
   DOM.alertSectionCount.textContent = `${alerts.length} active | ${activeRecords} record${activeRecords === 1 ? '' : 's'} flagged`;
   DOM.alertList.innerHTML = alerts.map(item => `
     <div class="alert-row alert-row-${item.level}">
@@ -541,62 +579,44 @@ function renderAlerts(data, alerts) {
   `).join('');
 }
 
-function renderStatusChip(latest, alerts) {
-  if (state.isPreview) {
-    setStatusChip('preview', 'Preview feed');
-    return;
-  }
-
-  if (!latest) {
-    setStatusChip('warning', 'Awaiting source');
-    return;
-  }
-
-  if (alerts.some(item => item.level === 'critical') || latest.status === 'critical') {
-    setStatusChip('critical', 'Critical now');
-    return;
-  }
-
-  if (alerts.length || latest.status === 'warning') {
-    setStatusChip('warning', 'Watch conditions');
-    return;
-  }
-
-  setStatusChip('online', 'Stable now');
+function renderStatusChip(tone) {
+  const level = tone.level === 'live' ? 'online' : tone.level;
+  setStatusChip(level, tone.chipLabel);
 }
 
 function applyFilters(data) {
-  const search = state.filter.search.toLowerCase();
+  const search = state.filter.search.trim().toLowerCase();
   const status = state.filter.status;
+
+  if (!status && !search) return data;
 
   return data.filter(record => {
     if (status && record.status !== status) return false;
     if (!search) return true;
 
-    return [
-      record.timestamp,
-      String(record.pm25),
-      String(record.pm10),
-      String(record.co2),
-      String(record.power),
-      record.status,
-    ].some(value => value.toLowerCase().includes(search));
+    return FILTER_FIELDS.some(field => String(record[field]).toLowerCase().includes(search));
   });
 }
 
 function renderTable(data) {
-  const filtered = applyFilters(data).slice().reverse();
+  const filtered = applyFilters(Array.isArray(data) ? data : []).slice().reverse();
   DOM.recordCount.textContent = `${filtered.length} record${filtered.length === 1 ? '' : 's'}`;
 
   if (!filtered.length) {
     DOM.recordCards.innerHTML = '';
     DOM.tableBody.innerHTML = '';
-    DOM.tableEmpty.style.display = 'block';
+    DOM.tableEmpty.hidden = false;
     return;
   }
 
-  DOM.tableEmpty.style.display = 'none';
-  DOM.recordCards.innerHTML = filtered.map(buildRecordCardMarkup).join('');
+  DOM.tableEmpty.hidden = true;
+  if (state.recordsCompact) {
+    DOM.recordCards.innerHTML = filtered.map(buildRecordCardMarkup).join('');
+    DOM.tableBody.innerHTML = '';
+    return;
+  }
+
+  DOM.recordCards.innerHTML = '';
   DOM.tableBody.innerHTML = filtered.map(buildTableRowMarkup).join('');
 }
 
@@ -604,7 +624,7 @@ function buildRecordCardMarkup(record) {
   return `<article class="record-card">
     <div class="record-card-head">
       <div class="record-card-time-wrap">
-        <strong class="record-card-time">${escapeHtml(formatTime(record.timestamp))}</strong>
+        <strong class="record-card-time">${escapeHtml(formatTime(record))}</strong>
         <span class="record-card-subtitle">PM2.5 ${escapeHtml(formatMetricValue(record.pm25, getMetricDef('pm25')))} ug/m3 | CO2 ${escapeHtml(formatMetricValue(record.co2, getMetricDef('co2')))} ppm</span>
       </div>
       <span class="status-badge status-${escapeHtml(record.status)}">${escapeHtml(getRecordStatusLabel(record.status))}</span>
@@ -631,7 +651,7 @@ function buildRecordCell(label, value, key) {
 
 function buildTableRowMarkup(record) {
   return `<tr>
-    <td>${escapeHtml(formatTime(record.timestamp))}</td>
+    <td>${escapeHtml(formatTime(record))}</td>
     <td>${escapeHtml(formatMetricValue(record.pm25, getMetricDef('pm25')))}</td>
     <td>${escapeHtml(formatMetricValue(record.pm10, getMetricDef('pm10')))}</td>
     <td>${escapeHtml(formatMetricValue(record.temperature, getMetricDef('temperature')))}</td>
@@ -660,33 +680,15 @@ function maxOf(data, key) {
 }
 
 function formatTime(value) {
-  if (!value) return '--';
-  const date = value instanceof Date ? value : new Date(String(value).replace(' ', 'T'));
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return formatDateValue(value, DATE_TIME_FORMATTER);
 }
 
 function formatShortTime(value) {
-  if (!value) return '--';
-  const date = value instanceof Date ? value : new Date(String(value).replace(' ', 'T'));
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return formatDateValue(value, DATE_TIME_FORMATTER);
 }
 
 function getRecordStatusLabel(status) {
-  return status === 'normal' ? 'Stable' : formatStatusLabel(status);
+  return STATUS_META[status]?.label || formatStatusLabel(status);
 }
 
 function exportCsv(data) {
@@ -728,6 +730,13 @@ function openSettingsMenu() {
   });
 }
 
+function scheduleRecordRender(records) {
+  window.cancelAnimationFrame(recordsRenderFrame);
+  recordsRenderFrame = window.requestAnimationFrame(() => {
+    renderTable(records);
+  });
+}
+
 function scheduleChartRender(records) {
   if (!Array.isArray(records) || !records.length) return;
   window.cancelAnimationFrame(chartRenderFrame);
@@ -762,6 +771,7 @@ function generatePreviewData() {
 
     const record = {
       timestamp: formatTimestamp(stamp),
+      dateMs: stamp.getTime(),
       pm25: roundValue(pm25, 0),
       pm10: roundValue(pm10, 0),
       temperature: roundValue(temperature, 1),
@@ -806,7 +816,40 @@ function formatTimestamp(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+function resolveDateMs(value) {
+  if (typeof value === 'number') return value;
+  if (value && typeof value === 'object' && Number.isFinite(value.dateMs)) return value.dateMs;
+  if (typeof value === 'string') {
+    const parsed = new Date(value.replace(' ', 'T')).getTime();
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function formatDateValue(value, formatter) {
+  const dateMs = resolveDateMs(value);
+  if (!Number.isFinite(dateMs)) return String(value ?? '--');
+  return formatter.format(dateMs);
+}
+
+function bindMediaChange(mediaQuery, handler) {
+  if (typeof mediaQuery.addEventListener === 'function') {
+    mediaQuery.addEventListener('change', handler);
+    return;
+  }
+  mediaQuery.addListener(handler);
+}
+
+function syncStatusFilterOptions() {
+  for (const option of DOM.statusFilter.options) {
+    if (!option.value || !STATUS_META[option.value]) continue;
+    option.textContent = STATUS_META[option.value].filterLabel;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  syncStatusFilterOptions();
+
   if (CONFIG.appsScriptUrl && CONFIG.useLiveByDefault) {
     DOM.urlInput.value = CONFIG.appsScriptUrl;
     state.liveUrl = CONFIG.appsScriptUrl;
@@ -814,5 +857,11 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  loadPreviewData();
+  if (CONFIG.previewOnNoSource) {
+    loadPreviewData();
+    return;
+  }
+
+  setUIState('empty');
+  setStatusChip('warning', 'Awaiting source');
 });

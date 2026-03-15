@@ -78,51 +78,46 @@
   </header>
 
   <main class="content">
-    <div class="loading-state" id="loadingState" style="display:none" role="status" aria-live="polite">
+    <div class="loading-state" id="loadingState" role="status" aria-live="polite" hidden>
       <div class="loading-spinner"></div>
-      <p>Fetching data...</p>
+      <h2>Loading dashboard</h2>
+      <p>Preparing the latest readings.</p>
     </div>
 
-    <div class="error-state" id="errorState" style="display:none" role="alert">
+    <div class="error-state" id="errorState" role="alert" hidden>
       <div class="error-icon" aria-hidden="true">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/>
           <path d="M12 8v5M12 16.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </div>
-      <h2>Failed to load data</h2>
-      <p id="errorMsg">Unable to fetch the requested endpoint.</p>
+      <h2>Unable to load data</h2>
+      <p id="errorMsg">Check the data source and try again.</p>
       <button class="secondary-btn secondary-btn--accent" id="retryBtn" type="button">Try again</button>
     </div>
 
-    <div class="empty-state" id="emptyState" style="display:none">
+    <div class="empty-state" id="emptyState" hidden>
       <div class="empty-icon" aria-hidden="true">
         <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
           <circle cx="20" cy="20" r="18" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
           <path d="M20 13v8M20 25v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </div>
-      <h2>No data source connected</h2>
-      <p>Open <strong>Settings</strong> and paste your Google Apps Script URL to begin.</p>
+      <h2>Connect a live source</h2>
+      <p>Paste your Apps Script URL to start live monitoring.</p>
+      <button class="secondary-btn secondary-btn--accent" id="emptyStateConnectBtn" type="button">Open settings</button>
     </div>
 
-    <div id="dashboardContent" style="display:none">
-      <section class="source-banner" id="sourceBanner" style="display:none" aria-live="polite">
-        <div class="source-banner-copy">
-          <p class="section-kicker" id="sourceBannerKicker">Preview mode</p>
-          <h2 class="source-banner-title" id="sourceBannerTitle">Sample data is active</h2>
-          <p class="source-banner-text" id="sourceBannerText">
-            Connect your Apps Script URL to replace this preview feed with live sensor data.
-          </p>
-        </div>
-        <button class="secondary-btn secondary-btn--accent source-banner-action" id="connectSourceBtn" type="button">
-          Open Settings
-        </button>
-      </section>
-
+    <div id="dashboardContent" aria-live="polite" hidden>
       <section class="hero-panel" aria-labelledby="heroHeading">
         <div class="hero-panel-shell">
           <div class="hero-copy">
+            <div class="hero-toolbar">
+              <span class="hero-state-pill hero-state-pill--live" id="heroStatePill">Live feed</span>
+              <button class="secondary-btn secondary-btn--accent hero-source-action" id="connectSourceBtn" type="button" hidden>
+                Connect source
+              </button>
+            </div>
             <p class="section-kicker">Control center</p>
             <h2 class="hero-heading" id="heroHeading">Waiting for live data</h2>
             <p class="hero-summary" id="heroSummary">
@@ -130,26 +125,26 @@
             </p>
           </div>
 
-          <div class="hero-meta" aria-label="Summary metrics">
+          <dl class="hero-meta" aria-label="Summary metrics">
             <div class="hero-meta-item">
-              <span class="hero-meta-label">Records in window</span>
-              <strong class="hero-meta-value" id="heroRecordCount">--</strong>
+              <dt class="hero-meta-label">Records in window</dt>
+              <dd class="hero-meta-value" id="heroRecordCount">--</dd>
             </div>
             <div class="hero-meta-item">
-              <span class="hero-meta-label">Highest concern</span>
-              <strong class="hero-meta-value" id="heroRisk">--</strong>
+              <dt class="hero-meta-label">Highest concern</dt>
+              <dd class="hero-meta-value" id="heroRisk">--</dd>
             </div>
             <div class="hero-meta-item">
-              <span class="hero-meta-label">Energy total</span>
-              <strong class="hero-meta-value" id="heroEnergy">--</strong>
+              <dt class="hero-meta-label">Energy total</dt>
+              <dd class="hero-meta-value" id="heroEnergy">--</dd>
             </div>
-          </div>
+          </dl>
         </div>
 
         <section class="priority-grid" id="priorityCards" aria-label="Priority metrics"></section>
       </section>
 
-      <section class="alert-section" id="alertSection" style="display:none" aria-live="polite">
+      <section class="alert-section" id="alertSection" aria-live="polite" hidden>
         <div class="section-head section-head--tight">
           <div>
             <p class="section-kicker">Attention</p>
@@ -166,9 +161,7 @@
             <p class="section-kicker">Supporting readings</p>
             <h2 class="section-title" id="metricsHeading">Support metrics</h2>
           </div>
-          <p class="section-blurb">
-            Secondary measurements stay available for diagnosis without pulling focus from the main status layer.
-          </p>
+          <p class="section-blurb">Secondary readings for diagnosis.</p>
         </div>
         <section class="kpi-grid kpi-grid--secondary" id="overviewCards" aria-label="Supporting metrics"></section>
       </section>
@@ -179,9 +172,7 @@
             <p class="section-kicker">Trends</p>
             <h2 class="section-title" id="chartSectionHeading">Trend analysis across the selected window</h2>
           </div>
-          <p class="section-blurb">
-            Pollution stays first, comfort stays grouped, and electrical load remains split into focused, readable views.
-          </p>
+          <p class="section-blurb">Air first, comfort grouped, load split for clarity.</p>
         </div>
 
         <div class="chart-grid" aria-label="Trend charts">
@@ -258,7 +249,7 @@
           </svg>
         </summary>
 
-        <div class="table-controls">
+        <div class="table-controls" role="search">
           <div class="search-wrap">
             <svg class="search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
@@ -302,7 +293,7 @@
             </thead>
             <tbody id="tableBody"></tbody>
           </table>
-          <div class="table-empty" id="tableEmpty" style="display:none" role="status">
+          <div class="table-empty" id="tableEmpty" role="status" hidden>
             No records match your filter.
           </div>
         </div>

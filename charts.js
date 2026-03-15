@@ -2,6 +2,12 @@
 
 const CHARTS = Object.create(null);
 const COMPACT_MEDIA = window.matchMedia('(max-width: 720px)');
+let chartDefaultsReady = false;
+const TIME_ONLY_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
 
 function chartToken(name, fallback) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -37,18 +43,18 @@ function colorWithAlpha(hex, alpha) {
 }
 
 function timeLabel(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return TIME_ONLY_FORMATTER.format(value);
+  }
+
   const date = new Date(String(value || '').replace(' ', 'T'));
   if (Number.isNaN(date.getTime())) return String(value || '');
-  return date.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return TIME_ONLY_FORMATTER.format(date);
 }
 
 function createChartModel(records) {
   return {
-    labels: records.map(record => timeLabel(record.timestamp)),
+    labels: records.map(record => timeLabel(record.dateMs ?? record.timestamp)),
     pm25: records.map(record => record.pm25),
     pm10: records.map(record => record.pm10),
     co2: records.map(record => record.co2),
@@ -111,17 +117,13 @@ function baseOptions(palette, options = {}) {
   const legend = Boolean(options.legend);
   const unit = options.unit || '';
 
-  Chart.defaults.color = palette.muted;
-  Chart.defaults.borderColor = palette.grid;
-  Chart.defaults.font.family = "'Instrument Sans', sans-serif";
-  Chart.defaults.font.size = palette.compact ? 11 : 12;
-  Chart.defaults.animation = false;
-  Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+  ensureChartDefaults();
 
   return {
     responsive: true,
     maintainAspectRatio: false,
     normalized: true,
+    resizeDelay: 80,
     interaction: {
       mode: 'index',
       intersect: false,
@@ -174,6 +176,14 @@ function baseOptions(palette, options = {}) {
       }),
     },
   };
+}
+
+function ensureChartDefaults() {
+  if (chartDefaultsReady) return;
+  Chart.defaults.font.family = "'Instrument Sans', sans-serif";
+  Chart.defaults.animation = false;
+  Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
+  chartDefaultsReady = true;
 }
 
 function upsertChart(canvasId, config) {

@@ -3,6 +3,7 @@
 // Configuration
 const CONFIG = Object.freeze({
   appsScriptUrl:     '',     // Paste your Web App URL here.
+  previewOnNoSource: true,
   useLiveByDefault:  true,
   sampleIntervalMin: 15,
   maxLiveRecords:    200,
@@ -114,3 +115,9 @@ const ALERT_CHECKS = Object.freeze([
   { key: 'voltage',     label: 'Voltage',     unit: 'V'     },
   { key: 'power',       label: 'Power',       unit: 'W'     },
 ]);
+
+const STATUS_META = Object.freeze({
+  normal:   { label: 'Stable',   filterLabel: 'Normal'   },
+  warning:  { label: 'Warning',  filterLabel: 'Warning'  },
+  critical: { label: 'Critical', filterLabel: 'Critical' },
+});
