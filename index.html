@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AirFlow Dashboard</title>
+  <title>AirFlow Command Center</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap"
     rel="stylesheet"
   />
   <link rel="stylesheet" href="style.css" />
@@ -19,7 +19,7 @@
     <div class="topbar-inner">
       <div class="topbar-brand">
         <h1 class="page-title">AirFlow</h1>
-        <p class="page-subtitle">Air quality and energy monitoring</p>
+        <p class="page-subtitle">Air quality and energy telemetry</p>
       </div>
 
       <div class="topbar-controls">
@@ -31,7 +31,7 @@
           <button class="range-btn active" id="btnRange24" data-range="24" type="button" aria-pressed="true">24h</button>
         </div>
 
-        <button class="icon-btn" id="refreshBtn" type="button" aria-label="Refresh data">
+        <button class="icon-btn icon-btn--refresh" id="refreshBtn" type="button" aria-label="Refresh data">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path d="M12.5 7A5.5 5.5 0 112.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             <path d="M2.5 1.5v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -68,8 +68,8 @@
               />
             </div>
             <div class="settings-actions">
-              <button class="secondary-btn" id="fetchLiveBtn" type="button">Connect</button>
-              <button class="secondary-btn" id="exportBtn" type="button">Export CSV</button>
+              <button class="secondary-btn secondary-btn--accent" id="fetchLiveBtn" type="button">Connect</button>
+              <button class="secondary-btn secondary-btn--aqua" id="exportBtn" type="button">Export CSV</button>
             </div>
           </div>
         </details>
@@ -92,7 +92,7 @@
       </div>
       <h2>Failed to load data</h2>
       <p id="errorMsg">Unable to fetch the requested endpoint.</p>
-      <button class="secondary-btn" id="retryBtn" type="button">Try again</button>
+      <button class="secondary-btn secondary-btn--accent" id="retryBtn" type="button">Try again</button>
     </div>
 
     <div class="empty-state" id="emptyState" style="display:none">
@@ -107,10 +107,23 @@
     </div>
 
     <div id="dashboardContent" style="display:none">
+      <section class="source-banner" id="sourceBanner" style="display:none" aria-live="polite">
+        <div class="source-banner-copy">
+          <p class="section-kicker" id="sourceBannerKicker">Preview mode</p>
+          <h2 class="source-banner-title" id="sourceBannerTitle">Sample data is active</h2>
+          <p class="source-banner-text" id="sourceBannerText">
+            Connect your Apps Script URL to replace this preview feed with live sensor data.
+          </p>
+        </div>
+        <button class="secondary-btn secondary-btn--accent source-banner-action" id="connectSourceBtn" type="button">
+          Open Settings
+        </button>
+      </section>
+
       <section class="hero-panel" aria-labelledby="heroHeading">
         <div class="hero-panel-shell">
           <div class="hero-copy">
-            <p class="section-kicker">Live environment snapshot</p>
+            <p class="section-kicker">Control center</p>
             <h2 class="hero-heading" id="heroHeading">Waiting for live data</h2>
             <p class="hero-summary" id="heroSummary">
               Connect a data source to see the latest indoor conditions, alert pressure, and load trends.
@@ -119,15 +132,15 @@
 
           <div class="hero-meta" aria-label="Summary metrics">
             <div class="hero-meta-item">
-              <span class="hero-meta-label">Records in view</span>
+              <span class="hero-meta-label">Records in window</span>
               <strong class="hero-meta-value" id="heroRecordCount">--</strong>
             </div>
             <div class="hero-meta-item">
-              <span class="hero-meta-label">Dominant risk</span>
+              <span class="hero-meta-label">Highest concern</span>
               <strong class="hero-meta-value" id="heroRisk">--</strong>
             </div>
             <div class="hero-meta-item">
-              <span class="hero-meta-label">Energy</span>
+              <span class="hero-meta-label">Energy total</span>
               <strong class="hero-meta-value" id="heroEnergy">--</strong>
             </div>
           </div>
@@ -151,10 +164,10 @@
         <div class="section-head">
           <div>
             <p class="section-kicker">Supporting readings</p>
-            <h2 class="section-title" id="metricsHeading">System snapshot</h2>
+            <h2 class="section-title" id="metricsHeading">Support metrics</h2>
           </div>
           <p class="section-blurb">
-            Secondary measurements stay visible without competing with the primary status callout.
+            Secondary measurements stay available for diagnosis without pulling focus from the main status layer.
           </p>
         </div>
         <section class="kpi-grid kpi-grid--secondary" id="overviewCards" aria-label="Supporting metrics"></section>
@@ -164,48 +177,51 @@
         <div class="section-head">
           <div>
             <p class="section-kicker">Trends</p>
-            <h2 class="section-title" id="chartSectionHeading">What changed across the selected range</h2>
+            <h2 class="section-title" id="chartSectionHeading">Trend analysis across the selected window</h2>
           </div>
           <p class="section-blurb">
-            Pollution stays first, comfort stays grouped, and electrical load is split into readable views.
+            Pollution stays first, comfort stays grouped, and electrical load remains split into focused, readable views.
           </p>
         </div>
 
         <div class="chart-grid" aria-label="Trend charts">
-          <article class="chart-card chart-card--primary">
+          <article class="chart-card chart-card--primary chart-card--air">
             <div class="chart-header">
               <div>
                 <span class="chart-eyebrow">Air</span>
                 <h3>PM2.5 and PM10</h3>
                 <p>Particulate matter over time</p>
               </div>
+              <span class="support-metric" id="pmMetric">Latest --</span>
             </div>
             <div class="chart-wrap"><canvas id="chartPM"></canvas></div>
           </article>
 
-          <article class="chart-card">
+          <article class="chart-card chart-card--air">
             <div class="chart-header">
               <div>
                 <span class="chart-eyebrow">Air</span>
                 <h3>CO2 concentration</h3>
                 <p>Carbon dioxide over time</p>
               </div>
+              <span class="support-metric" id="co2Metric">Latest --</span>
             </div>
             <div class="chart-wrap"><canvas id="chartCO2"></canvas></div>
           </article>
 
-          <article class="chart-card">
+          <article class="chart-card chart-card--comfort">
             <div class="chart-header">
               <div>
                 <span class="chart-eyebrow">Comfort</span>
                 <h3>Temperature and humidity</h3>
                 <p>Indoor comfort conditions</p>
               </div>
+              <span class="support-metric" id="comfortMetric">Latest --</span>
             </div>
             <div class="chart-wrap"><canvas id="chartTempHum"></canvas></div>
           </article>
 
-          <article class="chart-card">
+          <article class="chart-card chart-card--load">
             <div class="chart-header">
               <div>
                 <span class="chart-eyebrow">Load</span>
@@ -217,7 +233,7 @@
             <div class="chart-wrap"><canvas id="chartElec"></canvas></div>
           </article>
 
-          <article class="chart-card">
+          <article class="chart-card chart-card--power">
             <div class="chart-header">
               <div>
                 <span class="chart-eyebrow">Load</span>
@@ -235,7 +251,7 @@
         <summary>
           <div class="records-summary-text">
             <p class="section-kicker">Records</p>
-            <span class="records-title">Detailed history</span>
+            <span class="records-title">Historical records</span>
           </div>
           <svg class="summary-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>

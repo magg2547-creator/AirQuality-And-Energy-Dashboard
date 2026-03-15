@@ -5,6 +5,8 @@ const state = {
   liveUrl:      CONFIG.appsScriptUrl,
   filter:       { search: '', status: '' },
   isFetching:   false,
+  isPreview:    false,
+  chartCompact: window.matchMedia('(max-width: 720px)').matches,
   visibleHours: 24,
 };
 
@@ -26,11 +28,19 @@ const DOM = (() => {
     lastUpdated:       byId('lastUpdated'),
     statusDot:         document.querySelector('#statusChip .status-dot'),
     statusChipLabel:   byId('statusChipLabel'),
+    sourceBanner:      byId('sourceBanner'),
+    sourceBannerKicker: byId('sourceBannerKicker'),
+    sourceBannerTitle: byId('sourceBannerTitle'),
+    sourceBannerText:  byId('sourceBannerText'),
+    connectSourceBtn:  byId('connectSourceBtn'),
     heroHeading:       byId('heroHeading'),
     heroSummary:       byId('heroSummary'),
     heroRecordCount:   byId('heroRecordCount'),
     heroRisk:          byId('heroRisk'),
     heroEnergy:        byId('heroEnergy'),
+    pmMetric:          byId('pmMetric'),
+    co2Metric:         byId('co2Metric'),
+    comfortMetric:     byId('comfortMetric'),
     priorityCards:     byId('priorityCards'),
     overviewCards:     byId('overviewCards'),
     alertSection:      byId('alertSection'),
@@ -53,11 +63,26 @@ const METRIC_DEF_MAP = new Map(CARD_DEFS.map(def => [def.key, def]));
 const SEVERITY_WEIGHT = Object.freeze({ stable: 0, warning: 1, critical: 2 });
 
 let resizeTimer = 0;
+let chartRenderFrame = 0;
+
+DOM.urlInput.addEventListener('input', () => {
+  DOM.urlInput.setCustomValidity('');
+});
 
 DOM.fetchLiveBtn.addEventListener('click', () => {
   const url = DOM.urlInput.value.trim();
   if (!url) {
-    window.alert('Enter an Apps Script Web App URL first.');
+    DOM.urlInput.setCustomValidity('Paste your Apps Script Web App URL first.');
+    DOM.urlInput.reportValidity();
+    DOM.urlInput.focus();
+    return;
+  }
+
+  DOM.urlInput.setCustomValidity('');
+  DOM.urlInput.value = url;
+  if (!DOM.urlInput.checkValidity()) {
+    DOM.urlInput.reportValidity();
+    DOM.urlInput.focus();
     return;
   }
 
@@ -68,6 +93,7 @@ DOM.fetchLiveBtn.addEventListener('click', () => {
 
 DOM.refreshBtn.addEventListener('click', loadData);
 DOM.retryBtn.addEventListener('click', loadData);
+DOM.connectSourceBtn.addEventListener('click', openSettingsMenu);
 
 DOM.rangeButtons.forEach(button => {
   button.addEventListener('click', () => {
@@ -101,22 +127,33 @@ DOM.statusFilter.addEventListener('change', event => {
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
-    initAllCharts(getVisibleData(state.data));
-  }, 150);
+    const compact = window.matchMedia('(max-width: 720px)').matches;
+    if (compact !== state.chartCompact) {
+      state.chartCompact = compact;
+      scheduleChartRender(getVisibleData(state.data));
+    }
+  }, 120);
 });
 
 async function loadData() {
   if (state.isFetching) return;
 
   if (!state.liveUrl) {
-    setUIState('empty');
-    setStatusChip('warning', 'Awaiting source');
+    loadPreviewData();
     return;
   }
 
+  state.isPreview = false;
   state.isFetching = true;
-  setUIState('loading');
-  setStatusChip('warning', 'Fetching...');
+  setBusyState(true);
+
+  const hasExistingData = Array.isArray(state.data) && state.data.length > 0;
+  if (!hasExistingData) {
+    setUIState('loading');
+  } else {
+    setUIState('ok');
+  }
+  setStatusChip('warning', hasExistingData ? 'Refreshing...' : 'Fetching...');
 
   try {
     const response = await fetch(state.liveUrl);
@@ -142,15 +179,32 @@ async function loadData() {
       throw new Error('No valid records after normalisation.');
     }
 
+    state.isPreview = false;
     setUIState('ok');
     renderDashboard(state.data);
   } catch (error) {
-    console.error('[AirFlow]', error);
+    if (hasExistingData) {
+      setUIState('ok');
+      DOM.lastUpdated.textContent = 'Update failed | showing previous data';
+      setStatusChip('critical', 'Refresh failed');
+      return;
+    }
+
     setUIStateError(error.message);
     setStatusChip('critical', 'Fetch failed');
   } finally {
     state.isFetching = false;
+    setBusyState(false);
   }
+}
+
+function loadPreviewData() {
+  state.isPreview = true;
+  state.data = generatePreviewData();
+  state.isFetching = false;
+  setBusyState(false);
+  setUIState('ok');
+  renderDashboard(state.data);
 }
 
 function safeNum(value, fallback = null) {
@@ -189,12 +243,20 @@ function setUIState(next) {
   DOM.loadingState.style.display = next === 'loading' ? 'flex' : 'none';
   DOM.errorState.style.display = next === 'error' ? 'flex' : 'none';
   DOM.emptyState.style.display = next === 'empty' ? 'flex' : 'none';
-  DOM.dashContent.style.display = next === 'ok' ? 'block' : 'none';
+  DOM.dashContent.style.display = next === 'ok' ? 'grid' : 'none';
 }
 
 function setUIStateError(message) {
   setUIState('error');
   DOM.errorMsg.textContent = message;
+}
+
+function setBusyState(isBusy) {
+  DOM.fetchLiveBtn.disabled = isBusy;
+  DOM.refreshBtn.disabled = isBusy;
+  DOM.retryBtn.disabled = isBusy;
+  DOM.refreshBtn.classList.toggle('is-loading', isBusy);
+  DOM.dashContent.setAttribute('aria-busy', String(isBusy));
 }
 
 function setStatusChip(level, text) {
@@ -212,24 +274,39 @@ function renderDashboard(data) {
   const visible = getVisibleData(data);
   const latest = visible.length ? visible[visible.length - 1] : null;
   const alerts = buildAlertItems(latest);
+  const voltageDef = getMetricDef('voltage');
+  const currentDef = getMetricDef('current');
+  const energyDef = getMetricDef('energy');
+  const temperatureDef = getMetricDef('temperature');
+  const humidityDef = getMetricDef('humidity');
 
   DOM.lastUpdated.textContent = latest
-    ? `Last updated ${formatTime(latest.timestamp)}`
+    ? `Last updated ${formatShortTime(latest.timestamp)}`
     : 'Last updated --';
+  DOM.pmMetric.textContent = latest
+    ? `${formatMetricValue(latest.pm25, getMetricDef('pm25'))} / ${formatMetricValue(latest.pm10, getMetricDef('pm10'))} ug/m3`
+    : 'Latest --';
+  DOM.co2Metric.textContent = latest
+    ? `${formatMetricValue(latest.co2, getMetricDef('co2'))} ppm`
+    : 'Latest --';
+  DOM.comfortMetric.textContent = latest
+    ? `${formatMetricValue(latest.temperature, temperatureDef)} C | ${formatMetricValue(latest.humidity, humidityDef)}%`
+    : 'Latest --';
   DOM.loadMetric.textContent = latest
-    ? `Avg ${formatMetricValue(averageOf(visible, 'voltage'), getMetricDef('voltage'))} V | ${formatMetricValue(averageOf(visible, 'current'), getMetricDef('current'))} A`
+    ? `Avg ${formatMetricValue(averageOf(visible, 'voltage'), voltageDef)} V | ${formatMetricValue(averageOf(visible, 'current'), currentDef)} A`
     : 'Avg --';
   DOM.energyMetric.textContent = latest
-    ? `Peak ${formatMetricValue(maxOf(visible, 'power'), getMetricDef('power'))} W | ${formatMetricValue(latest.energy, getMetricDef('energy'))} kWh`
+    ? `Peak ${formatMetricValue(maxOf(visible, 'power'), getMetricDef('power'))} W | ${formatMetricValue(latest.energy, energyDef)} kWh`
     : 'Energy -- kWh';
 
+  renderSourceBanner();
   renderHero(visible, latest, alerts);
   renderPriorityCards(visible, latest);
   renderOverviewCards(visible, latest);
   renderAlerts(visible, alerts);
   renderStatusChip(latest, alerts);
   renderTable(visible);
-  initAllCharts(visible);
+  scheduleChartRender(visible);
 }
 
 function getMetricDef(key) {
@@ -302,6 +379,13 @@ function renderHero(data, latest, alerts) {
 }
 
 function getHeroCopy(latest, alerts, dominantAlert) {
+  if (state.isPreview) {
+    return {
+      heading: 'Interactive preview is active',
+      summary: 'Sample readings are populating the dashboard so layout, spacing, and responsive behavior can be refined before the live Apps Script source is attached.',
+    };
+  }
+
   if (!latest) {
     return {
       heading: 'Waiting for live data',
@@ -330,6 +414,18 @@ function getHeroCopy(latest, alerts, dominantAlert) {
     heading: 'Environment is stable',
     summary: `No active threshold breaches across the selected ${state.visibleHours}h range. Use the charts below to confirm the trend.`,
   };
+}
+
+function renderSourceBanner() {
+  if (state.isPreview) {
+    DOM.sourceBanner.style.display = 'flex';
+    DOM.sourceBannerKicker.textContent = 'Preview mode';
+    DOM.sourceBannerTitle.textContent = 'Sample data is active until the live feed is connected';
+    DOM.sourceBannerText.textContent = 'Open Settings and paste your Apps Script URL whenever you want to switch this page to live sensor data.';
+    return;
+  }
+
+  DOM.sourceBanner.style.display = 'none';
 }
 
 function renderPriorityCards(data, latest) {
@@ -429,7 +525,7 @@ function renderAlerts(data, alerts) {
   }
 
   const activeRecords = data.filter(record => record.status !== 'normal').length;
-  DOM.alertSection.style.display = 'block';
+  DOM.alertSection.style.display = 'grid';
   DOM.alertSectionCount.textContent = `${alerts.length} active | ${activeRecords} record${activeRecords === 1 ? '' : 's'} flagged`;
   DOM.alertList.innerHTML = alerts.map(item => `
     <div class="alert-row alert-row-${item.level}">
@@ -446,6 +542,11 @@ function renderAlerts(data, alerts) {
 }
 
 function renderStatusChip(latest, alerts) {
+  if (state.isPreview) {
+    setStatusChip('preview', 'Preview feed');
+    return;
+  }
+
   if (!latest) {
     setStatusChip('warning', 'Awaiting source');
     return;
@@ -506,7 +607,7 @@ function buildRecordCardMarkup(record) {
         <strong class="record-card-time">${escapeHtml(formatTime(record.timestamp))}</strong>
         <span class="record-card-subtitle">PM2.5 ${escapeHtml(formatMetricValue(record.pm25, getMetricDef('pm25')))} ug/m3 | CO2 ${escapeHtml(formatMetricValue(record.co2, getMetricDef('co2')))} ppm</span>
       </div>
-      <span class="status-badge status-${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
+      <span class="status-badge status-${escapeHtml(record.status)}">${escapeHtml(getRecordStatusLabel(record.status))}</span>
     </div>
     <dl class="record-card-grid">
       ${buildRecordCell('PM10', record.pm10, 'pm10')}
@@ -540,7 +641,7 @@ function buildTableRowMarkup(record) {
     <td>${escapeHtml(formatMetricValue(record.current, getMetricDef('current')))}</td>
     <td>${escapeHtml(formatMetricValue(record.power, getMetricDef('power')))}</td>
     <td>${escapeHtml(formatMetricValue(record.energy, getMetricDef('energy')))}</td>
-    <td><span class="status-badge status-${escapeHtml(record.status)}">${escapeHtml(record.status)}</span></td>
+    <td><span class="status-badge status-${escapeHtml(record.status)}">${escapeHtml(getRecordStatusLabel(record.status))}</span></td>
   </tr>`;
 }
 
@@ -567,9 +668,25 @@ function formatTime(value) {
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
     hour12: false,
   });
+}
+
+function formatShortTime(value) {
+  if (!value) return '--';
+  const date = value instanceof Date ? value : new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function getRecordStatusLabel(status) {
+  return status === 'normal' ? 'Stable' : formatStatusLabel(status);
 }
 
 function exportCsv(data) {
@@ -604,6 +721,91 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function openSettingsMenu() {
+  DOM.settingsMenu.setAttribute('open', '');
+  window.requestAnimationFrame(() => {
+    DOM.urlInput.focus();
+  });
+}
+
+function scheduleChartRender(records) {
+  if (!Array.isArray(records) || !records.length) return;
+  window.cancelAnimationFrame(chartRenderFrame);
+  chartRenderFrame = window.requestAnimationFrame(() => {
+    initAllCharts(records);
+  });
+}
+
+function generatePreviewData() {
+  const points = Math.max(24, Math.round((24 * 60) / CONFIG.sampleIntervalMin));
+  const now = new Date();
+  const preview = [];
+  let energy = 8.4;
+
+  for (let index = 0; index < points; index += 1) {
+    const offset = (points - 1 - index) * CONFIG.sampleIntervalMin;
+    const stamp = new Date(now.getTime() - offset * 60 * 1000);
+    const waveA = Math.sin(index / 5.2);
+    const waveB = Math.cos(index / 7.8);
+    const lateLift = index > points - 12 ? (index - (points - 12)) * 1.8 : 0;
+
+    const pm25 = clampNumber(18 + waveA * 7 + Math.max(0, waveB) * 8 + lateLift, 12, 68);
+    const pm10 = clampNumber(pm25 * 1.34 + 6 + Math.max(0, Math.sin(index / 4.8) * 5), 22, 92);
+    const co2 = clampNumber(610 + (waveA + 1.1) * 72 + Math.max(0, Math.sin((index - 22) / 8) * 118), 520, 980);
+    const temperature = clampNumber(27.1 + Math.sin(index / 8.6) * 1.1 + Math.cos(index / 11.3) * 0.5, 25.4, 31.8);
+    const humidity = clampNumber(60 + Math.cos(index / 6.1) * 5 + Math.sin(index / 10.4) * 4, 49, 74);
+    const voltage = clampNumber(227.5 + Math.sin(index / 9.4) * 2 + (index > points - 8 ? 2.4 : 0), 224, 235);
+    const current = clampNumber(0.41 + Math.max(0, Math.sin(index / 5.1)) * 0.26 + lateLift * 0.006, 0.28, 0.92);
+    const power = clampNumber(voltage * current * 0.71, 62, 146);
+
+    energy += (power * (CONFIG.sampleIntervalMin / 60)) / 1000;
+
+    const record = {
+      timestamp: formatTimestamp(stamp),
+      pm25: roundValue(pm25, 0),
+      pm10: roundValue(pm10, 0),
+      temperature: roundValue(temperature, 1),
+      humidity: roundValue(humidity, 0),
+      co2: roundValue(co2, 0),
+      voltage: roundValue(voltage, 0),
+      current: roundValue(current, 2),
+      power: roundValue(power, 0),
+      energy: roundValue(energy, 1),
+    };
+
+    record.status = derivePreviewStatus(record);
+    preview.push(record);
+  }
+
+  return preview;
+}
+
+function derivePreviewStatus(record) {
+  const checks = ['pm25', 'pm10', 'co2', 'temperature', 'humidity', 'voltage', 'power'];
+  let worst = 'normal';
+
+  for (const key of checks) {
+    const level = getMetricLevel(record[key], key);
+    if (level === 'critical') return 'critical';
+    if (level === 'warning') worst = 'warning';
+  }
+
+  return worst;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function roundValue(value, decimals) {
+  return Number(value.toFixed(decimals));
+}
+
+function formatTimestamp(date) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   if (CONFIG.appsScriptUrl && CONFIG.useLiveByDefault) {
     DOM.urlInput.value = CONFIG.appsScriptUrl;
@@ -612,6 +814,5 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  setUIState('empty');
-  setStatusChip('warning', 'Awaiting source');
+  loadPreviewData();
 });

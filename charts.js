@@ -1,6 +1,7 @@
 'use strict';
 
-const CHARTS = {};
+const CHARTS = Object.create(null);
+const COMPACT_MEDIA = window.matchMedia('(max-width: 720px)');
 
 function chartToken(name, fallback) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -9,19 +10,19 @@ function chartToken(name, fallback) {
 
 function chartPalette() {
   return {
-    compact: window.matchMedia('(max-width: 640px)').matches,
-    text: chartToken('--text', '#14212b'),
-    muted: chartToken('--text-2', '#5f7283'),
-    grid: chartToken('--chart-grid', 'rgba(194, 204, 212, 0.7)'),
-    surface: chartToken('--surface-strong', '#fcfefd'),
-    pm25: chartToken('--chart-pm25', '#c2410c'),
-    pm10: chartToken('--chart-pm10', '#7b8794'),
-    co2: chartToken('--chart-co2', '#a16207'),
-    temperature: chartToken('--chart-temp', '#dc2626'),
-    humidity: chartToken('--chart-humidity', '#0f766e'),
-    voltage: chartToken('--chart-voltage', '#2563eb'),
-    current: chartToken('--chart-current', '#0f766e'),
-    power: chartToken('--chart-power', '#b45309'),
+    compact: COMPACT_MEDIA.matches,
+    text: chartToken('--text', '#eef3fa'),
+    muted: chartToken('--text-2', '#95a5b7'),
+    surface: chartToken('--surface-strong', '#1a2432'),
+    grid: chartToken('--chart-grid', 'rgba(255, 255, 255, 0.06)'),
+    pm25: chartToken('--chart-pm25', '#d5a35d'),
+    pm10: chartToken('--chart-pm10', '#7f92ab'),
+    co2: chartToken('--chart-co2', '#7ca6eb'),
+    temperature: chartToken('--chart-temp', '#ec8c7f'),
+    humidity: chartToken('--chart-humidity', '#70c4b6'),
+    voltage: chartToken('--chart-voltage', '#92a3ff'),
+    current: chartToken('--chart-current', '#63d0be'),
+    power: chartToken('--chart-power', '#e2b166'),
   };
 }
 
@@ -35,32 +36,46 @@ function colorWithAlpha(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function lineDataset(label, values, color, extra = {}) {
+function timeLabel(value) {
+  const date = new Date(String(value || '').replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function createChartModel(records) {
   return {
-    label,
-    data:             values,
-    borderColor:      color,
-    backgroundColor:  color,
-    borderWidth:      2.5,
-    fill:             false,
-    tension:          0.28,
-    pointRadius:      0,
-    pointHoverRadius: 4,
-    pointHitRadius:   12,
-    ...extra,
+    labels: records.map(record => timeLabel(record.timestamp)),
+    pm25: records.map(record => record.pm25),
+    pm10: records.map(record => record.pm10),
+    co2: records.map(record => record.co2),
+    temperature: records.map(record => record.temperature),
+    humidity: records.map(record => record.humidity),
+    voltage: records.map(record => record.voltage),
+    current: records.map(record => record.current),
+    power: records.map(record => record.power),
   };
 }
 
-function timeLabels(records) {
-  return records.map(record => {
-    const date = new Date(String(record.timestamp || '').replace(' ', 'T'));
-    if (Number.isNaN(date.getTime())) return String(record.timestamp || '');
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-  });
+function lineDataset(label, values, color, extra = {}) {
+  return {
+    label,
+    data: values,
+    borderColor: color,
+    backgroundColor: color,
+    borderWidth: 2.2,
+    pointRadius: 0,
+    pointHoverRadius: 3,
+    pointHitRadius: 10,
+    tension: 0.26,
+    cubicInterpolationMode: 'monotone',
+    spanGaps: true,
+    fill: false,
+    ...extra,
+  };
 }
 
 function tickConfig(palette, callback) {
@@ -76,119 +91,153 @@ function tickConfig(palette, callback) {
 function axisConfig(palette, extra = {}) {
   return {
     border: { display: false },
-    grid:   { color: palette.grid, drawTicks: false },
-    ticks:  tickConfig(palette),
+    grid: {
+      color: palette.grid,
+      drawTicks: false,
+    },
+    ticks: tickConfig(palette),
     ...extra,
   };
 }
 
-function baseOptions(options = {}) {
-  const palette = chartPalette();
-  const yUnit = options.yUnit || '';
-  const legend = options.legend !== false;
-  const yCallback = options.yCallback || (value => (yUnit ? `${value} ${yUnit}` : value));
-  const scales = options.scales || {
-    x: axisConfig(palette),
-    y: axisConfig(palette, { ticks: tickConfig(palette, yCallback) }),
+function defaultTooltipLabel(unit) {
+  return context => {
+    const suffix = unit ? ` ${unit}` : '';
+    return `${context.dataset.label}: ${context.parsed.y}${suffix}`;
   };
+}
+
+function baseOptions(palette, options = {}) {
+  const legend = Boolean(options.legend);
+  const unit = options.unit || '';
 
   Chart.defaults.color = palette.muted;
   Chart.defaults.borderColor = palette.grid;
-  Chart.defaults.font.family = "'DM Sans', sans-serif";
-  Chart.defaults.font.size = 12;
+  Chart.defaults.font.family = "'Instrument Sans', sans-serif";
+  Chart.defaults.font.size = palette.compact ? 11 : 12;
   Chart.defaults.animation = false;
+  Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.75);
 
   return {
-    responsive:          true,
+    responsive: true,
     maintainAspectRatio: false,
-    interaction:         { mode: 'index', intersect: false },
+    normalized: true,
+    interaction: {
+      mode: 'index',
+      intersect: false,
+    },
+    layout: {
+      padding: {
+        top: 4,
+        right: 2,
+        bottom: 0,
+        left: 0,
+      },
+    },
+    elements: {
+      line: {
+        capBezierPoints: true,
+      },
+    },
     plugins: {
       legend: {
-        display:  legend,
+        display: legend && !palette.compact,
         position: 'top',
-        align:    'start',
+        align: 'start',
         labels: {
+          color: palette.muted,
           usePointStyle: true,
+          pointStyle: 'circle',
           boxWidth: 8,
           boxHeight: 8,
-          padding: palette.compact ? 12 : 16,
-          color: palette.muted,
+          padding: 14,
         },
       },
       tooltip: {
-        backgroundColor: palette.text,
-        borderWidth:     0,
-        padding:         10,
-        titleColor:      palette.surface,
-        bodyColor:       palette.surface,
-        displayColors:   true,
-        cornerRadius:    12,
+        backgroundColor: colorWithAlpha('0f1722', 0.96),
+        borderColor: colorWithAlpha('d2ad74', 0.22),
+        borderWidth: 1,
+        padding: 10,
+        displayColors: true,
+        titleColor: palette.text,
+        bodyColor: palette.text,
+        cornerRadius: 12,
         callbacks: {
-          label: context => {
-            const suffix = yUnit ? ` ${yUnit}` : '';
-            return `${context.dataset.label}: ${context.parsed.y}${suffix}`;
-          },
+          label: options.tooltipLabel || defaultTooltipLabel(unit),
         },
       },
     },
-    scales,
+    scales: options.scales || {
+      x: axisConfig(palette),
+      y: axisConfig(palette, {
+        ticks: tickConfig(palette, value => (unit ? `${value} ${unit}` : value)),
+      }),
+    },
   };
 }
 
-function buildChart(canvasId, config) {
-  if (CHARTS[canvasId]) {
-    CHARTS[canvasId].destroy();
-    delete CHARTS[canvasId];
-  }
-
+function upsertChart(canvasId, config) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return null;
 
-  CHARTS[canvasId] = new Chart(canvas.getContext('2d'), config);
-  return CHARTS[canvasId];
+  const existing = CHARTS[canvasId];
+  if (!existing) {
+    CHARTS[canvasId] = new Chart(canvas.getContext('2d'), config);
+    return CHARTS[canvasId];
+  }
+
+  existing.data.labels = config.data.labels;
+  existing.data.datasets = config.data.datasets;
+  existing.options = config.options;
+  existing.update('none');
+  return existing;
 }
 
-function buildChartPM(records) {
-  const palette = chartPalette();
-  buildChart('chartPM', {
+function buildChartPM(model, palette) {
+  upsertChart('chartPM', {
     type: 'line',
     data: {
-      labels: timeLabels(records),
+      labels: model.labels,
       datasets: [
-        lineDataset('PM2.5', records.map(record => record.pm25), palette.pm25),
-        lineDataset('PM10', records.map(record => record.pm10), palette.pm10),
+        lineDataset('PM2.5', model.pm25, palette.pm25, {
+          fill: true,
+          backgroundColor: colorWithAlpha(palette.pm25, 0.08),
+        }),
+        lineDataset('PM10', model.pm10, palette.pm10),
       ],
     },
-    options: baseOptions({ yUnit: 'ug/m3' }),
+    options: baseOptions(palette, { legend: true, unit: 'ug/m3' }),
   });
 }
 
-function buildChartCO2(records) {
-  const palette = chartPalette();
-  buildChart('chartCO2', {
+function buildChartCO2(model, palette) {
+  upsertChart('chartCO2', {
     type: 'line',
     data: {
-      labels: timeLabels(records),
+      labels: model.labels,
       datasets: [
-        lineDataset('CO2', records.map(record => record.co2), palette.co2),
+        lineDataset('CO2', model.co2, palette.co2, {
+          fill: true,
+          backgroundColor: colorWithAlpha(palette.co2, 0.08),
+        }),
       ],
     },
-    options: baseOptions({ yUnit: 'ppm' }),
+    options: baseOptions(palette, { unit: 'ppm' }),
   });
 }
 
-function buildChartTempHum(records) {
-  const palette = chartPalette();
-  buildChart('chartTempHum', {
+function buildChartTempHum(model, palette) {
+  upsertChart('chartTempHum', {
     type: 'line',
     data: {
-      labels: timeLabels(records),
+      labels: model.labels,
       datasets: [
-        lineDataset('Temperature', records.map(record => record.temperature), palette.temperature, { yAxisID: 'yTemp' }),
-        lineDataset('Humidity', records.map(record => record.humidity), palette.humidity, { yAxisID: 'yHum' }),
+        lineDataset('Temperature', model.temperature, palette.temperature, { yAxisID: 'yTemp' }),
+        lineDataset('Humidity', model.humidity, palette.humidity, { yAxisID: 'yHum' }),
       ],
     },
-    options: baseOptions({
+    options: baseOptions(palette, {
+      legend: true,
       scales: {
         x: axisConfig(palette),
         yTemp: axisConfig(palette, {
@@ -201,60 +250,71 @@ function buildChartTempHum(records) {
           ticks: tickConfig(palette, value => `${value}%`),
         }),
       },
-    }),
-  });
-}
-
-function buildChartElec(records) {
-  const palette = chartPalette();
-  buildChart('chartElec', {
-    type: 'line',
-    data: {
-      labels: timeLabels(records),
-      datasets: [
-        lineDataset('Voltage', records.map(record => record.voltage), palette.voltage, { yAxisID: 'yVolt' }),
-        lineDataset('Current', records.map(record => record.current), palette.current, { yAxisID: 'yCurrent' }),
-      ],
-    },
-    options: baseOptions({
-      scales: {
-        x: axisConfig(palette),
-        yVolt: axisConfig(palette, {
-          position: 'left',
-          ticks: tickConfig(palette, value => `${value}V`),
-        }),
-        yCurrent: axisConfig(palette, {
-          position: 'right',
-          grid: { display: false },
-          ticks: tickConfig(palette, value => `${value}A`),
-        }),
+      tooltipLabel: context => {
+        const suffix = context.dataset.label === 'Humidity' ? '%' : ' C';
+        return `${context.dataset.label}: ${context.parsed.y}${suffix}`;
       },
     }),
   });
 }
 
-function buildChartPower(records) {
-  const palette = chartPalette();
-  buildChart('chartPower', {
+function buildChartElectrical(model, palette) {
+  upsertChart('chartElec', {
     type: 'line',
     data: {
-      labels: timeLabels(records),
+      labels: model.labels,
       datasets: [
-        lineDataset('Power', records.map(record => record.power), palette.power, {
+        lineDataset('Voltage', model.voltage, palette.voltage, { yAxisID: 'yVolt' }),
+        lineDataset('Current', model.current, palette.current, { yAxisID: 'yCurrent' }),
+      ],
+    },
+    options: baseOptions(palette, {
+      legend: true,
+      scales: {
+        x: axisConfig(palette),
+        yVolt: axisConfig(palette, {
+          position: 'left',
+          ticks: tickConfig(palette, value => `${value} V`),
+        }),
+        yCurrent: axisConfig(palette, {
+          position: 'right',
+          grid: { display: false },
+          ticks: tickConfig(palette, value => `${value} A`),
+        }),
+      },
+      tooltipLabel: context => {
+        const suffix = context.dataset.label === 'Voltage' ? ' V' : ' A';
+        return `${context.dataset.label}: ${context.parsed.y}${suffix}`;
+      },
+    }),
+  });
+}
+
+function buildChartPower(model, palette) {
+  upsertChart('chartPower', {
+    type: 'line',
+    data: {
+      labels: model.labels,
+      datasets: [
+        lineDataset('Power', model.power, palette.power, {
           fill: true,
-          backgroundColor: colorWithAlpha(palette.power, 0.14),
+          backgroundColor: colorWithAlpha(palette.power, 0.12),
         }),
       ],
     },
-    options: baseOptions({ yUnit: 'W' }),
+    options: baseOptions(palette, { unit: 'W' }),
   });
 }
 
 function initAllCharts(records) {
   if (!Array.isArray(records) || !records.length) return;
-  buildChartPM(records);
-  buildChartCO2(records);
-  buildChartTempHum(records);
-  buildChartElec(records);
-  buildChartPower(records);
+
+  const palette = chartPalette();
+  const model = createChartModel(records);
+
+  buildChartPM(model, palette);
+  buildChartCO2(model, palette);
+  buildChartTempHum(model, palette);
+  buildChartElectrical(model, palette);
+  buildChartPower(model, palette);
 }
