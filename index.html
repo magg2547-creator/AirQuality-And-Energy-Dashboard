@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AirFlow Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="page-shell">
+
+  <!-- ── Topbar ──────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-brand">
+        <h1 class="page-title">AirFlow</h1>
+        <p class="page-subtitle">Air quality &amp; energy monitoring</p>
+      </div>
+
+      <div class="topbar-controls">
+        <span class="last-updated" id="lastUpdated">Last updated --</span>
+
+        <div class="range-switch" role="tablist" aria-label="Visible time range">
+          <button class="range-btn"        id="btnRange6"  data-range="6"  role="tab">6h</button>
+          <button class="range-btn"        id="btnRange12" data-range="12" role="tab">12h</button>
+          <button class="range-btn active" id="btnRange24" data-range="24" role="tab" aria-selected="true">24h</button>
+        </div>
+
+        <button class="icon-btn" id="refreshBtn" aria-label="Refresh data">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M12.5 7A5.5 5.5 0 112.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M2.5 1.5v3h3"                 stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Refresh
+        </button>
+
+        <div class="status-chip" id="statusChip">
+          <span class="status-dot online" aria-hidden="true"></span>
+          <span id="statusChipLabel">Connecting...</span>
+        </div>
+
+        <details class="settings-menu" id="settingsMenu">
+          <summary class="icon-btn" aria-label="Open settings">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <circle cx="7" cy="7" r="2" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.93 2.93l1.06 1.06M10.01 10.01l1.06 1.06M2.93 11.07l1.06-1.06M10.01 3.99l1.06-1.06"
+                    stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+            Settings
+          </summary>
+          <div class="settings-panel">
+            <div class="settings-row">
+              <label class="settings-label" for="appsScriptUrl">Google Apps Script URL</label>
+              <input type="url" id="appsScriptUrl" class="url-input"
+                     placeholder="https://script.google.com/macros/s/…/exec" />
+            </div>
+            <div class="settings-actions">
+              <button class="secondary-btn" id="fetchLiveBtn">Connect</button>
+              <button class="secondary-btn" id="exportBtn">Export CSV</button>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Page body ───────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- Loading -->
+    <div class="loading-state" id="loadingState" style="display:none"
+         role="status" aria-live="polite">
+      <div class="loading-spinner"></div>
+      <p>Fetching data...</p>
+    </div>
+
+    <!-- Error -->
+    <div class="error-state" id="errorState" style="display:none" role="alert">
+      <div class="error-icon" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 8v5M12 16.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <h2>Failed to load data</h2>
+      <p id="errorMsg">Unable to fetch the requested endpoint.</p>
+      <button class="secondary-btn" id="retryBtn">Try again</button>
+    </div>
+
+    <!-- Empty (no URL configured) -->
+    <div class="empty-state" id="emptyState" style="display:none">
+      <div class="empty-icon" aria-hidden="true">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+          <circle cx="20" cy="20" r="18" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <path d="M20 13v8M20 25v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <h2>No data source connected</h2>
+      <p>Open <strong>Settings</strong> and paste your Google Apps Script URL to begin.</p>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboardContent" style="display:none">
+
+      <!-- KPI cards -->
+      <section class="kpi-grid" id="overviewCards" aria-label="Key metrics"></section>
+
+      <!-- Alerts -->
+      <section class="alert-section" id="alertSection"
+               style="display:none" aria-live="polite">
+        <div class="alert-section-head">
+          <h2 class="alert-section-title">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M7 1l1.8 5.4H13L9.5 9.7l1.8 4.3L7 11.5l-4.3 2.5 1.8-4.3L1 6.4h4.2L7 1z"
+                    stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+            </svg>
+            Alerts
+          </h2>
+          <span class="alert-section-count" id="alertSectionCount"></span>
+        </div>
+        <div class="alert-list" id="alertList"></div>
+      </section>
+
+      <!-- Charts -->
+      <section class="chart-grid" aria-label="Trend charts">
+        <article class="chart-card chart-card--wide">
+          <div class="chart-header">
+            <div><h2>PM2.5 &amp; PM10</h2><p>Particulate matter over time</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="chartPM"></canvas></div>
+        </article>
+
+        <article class="chart-card">
+          <div class="chart-header">
+            <div><h2>CO2 concentration</h2><p>Carbon dioxide over time</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="chartCO2"></canvas></div>
+        </article>
+
+        <article class="chart-card">
+          <div class="chart-header">
+            <div><h2>Temperature &amp; Humidity</h2><p>Indoor comfort conditions</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="chartTempHum"></canvas></div>
+        </article>
+
+        <article class="chart-card chart-card--wide">
+          <div class="chart-header">
+            <div><h2>Voltage, Current &amp; Power</h2><p>Electrical performance</p></div>
+            <span class="support-metric" id="energyMetric">Energy -- kWh</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chartElec"></canvas></div>
+        </article>
+      </section>
+
+      <!-- Records -->
+      <details class="records-details" id="recordsDetails">
+        <summary>
+          <span>Detailed records</span>
+          <svg class="summary-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </summary>
+
+        <div class="table-controls">
+          <div class="search-wrap">
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+              <path d="M9.5 9.5L13 13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+            <input type="search" id="tableSearch" class="table-search"
+                   placeholder="Search time, PM2.5, CO2 or status…"
+                   aria-label="Search records" />
+          </div>
+          <select id="statusFilter" class="filter-select" aria-label="Filter by status">
+            <option value="">All status</option>
+            <option value="normal">Normal</option>
+            <option value="warning">Warning</option>
+            <option value="critical">Critical</option>
+          </select>
+          <span class="record-count" id="recordCount" aria-live="polite">-- records</span>
+        </div>
+
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">PM2.5</th>
+                <th scope="col">PM10</th>
+                <th scope="col">Temp</th>
+                <th scope="col">Humidity</th>
+                <th scope="col">CO2</th>
+                <th scope="col">Voltage</th>
+                <th scope="col">Current</th>
+                <th scope="col">Power</th>
+                <th scope="col">Energy</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+          <div class="table-empty" id="tableEmpty" style="display:none" role="status">
+            No records match your filter.
+          </div>
+        </div>
+      </details>
+
+    </div><!-- /dashboardContent -->
+  </main>
+</div>
+
+<script src="data.js"></script>
+<script src="charts.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
