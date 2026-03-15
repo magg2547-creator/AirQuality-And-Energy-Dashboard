@@ -1,84 +1,137 @@
 'use strict';
 
-// ── Chart.js globals ───────────────────────────────────────────
-Chart.defaults.color       = '#607083';
-Chart.defaults.borderColor = 'rgba(230,235,242,0.9)';
-Chart.defaults.font.family = "'DM Sans', sans-serif";
-Chart.defaults.font.size   = 12;
-Chart.defaults.animation   = false;
-
-// ── Shared style constants ─────────────────────────────────────
-const GRID  = { color: 'rgba(230,235,242,0.9)', drawTicks: false };
-const TICKS = { color: '#607083', maxTicksLimit: 6, padding: 8 };
-const AXIS  = {
-  border: { display: false },
-  grid:   GRID,
-  ticks:  { ...TICKS, maxRotation: 0 },
-};
-
-const TOOLTIP_BASE = {
-  backgroundColor: '#16202c',
-  borderWidth:     0,
-  padding:         10,
-  titleColor:      '#ffffff',
-  bodyColor:       '#f1f5f9',
-  displayColors:   true,
-  cornerRadius:    10,
-  titleFont: { family: "'DM Sans', sans-serif", size: 12, weight: '700' },
-  bodyFont:  { family: "'DM Sans', sans-serif", size: 12 },
-};
-
-// ── Instance registry ──────────────────────────────────────────
 const CHARTS = {};
 
-// ── Helpers ────────────────────────────────────────────────────
+function chartToken(name, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function chartPalette() {
+  return {
+    compact: window.matchMedia('(max-width: 640px)').matches,
+    text: chartToken('--text', '#14212b'),
+    muted: chartToken('--text-2', '#5f7283'),
+    grid: chartToken('--chart-grid', 'rgba(194, 204, 212, 0.7)'),
+    surface: chartToken('--surface-strong', '#fcfefd'),
+    pm25: chartToken('--chart-pm25', '#c2410c'),
+    pm10: chartToken('--chart-pm10', '#7b8794'),
+    co2: chartToken('--chart-co2', '#a16207'),
+    temperature: chartToken('--chart-temp', '#dc2626'),
+    humidity: chartToken('--chart-humidity', '#0f766e'),
+    voltage: chartToken('--chart-voltage', '#2563eb'),
+    current: chartToken('--chart-current', '#0f766e'),
+    power: chartToken('--chart-power', '#b45309'),
+  };
+}
+
+function colorWithAlpha(hex, alpha) {
+  const normalized = hex.replace('#', '');
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return hex;
+
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function lineDataset(label, values, color, extra = {}) {
   return {
     label,
     data:             values,
     borderColor:      color,
     backgroundColor:  color,
-    borderWidth:      2,
+    borderWidth:      2.5,
     fill:             false,
-    tension:          0.35,
+    tension:          0.28,
     pointRadius:      0,
     pointHoverRadius: 4,
+    pointHitRadius:   12,
     ...extra,
   };
 }
 
 function timeLabels(records) {
-  return records.map(r => {
-    const d = new Date(String(r.timestamp || '').replace(' ', 'T'));
-    if (Number.isNaN(d.getTime())) return String(r.timestamp || '');
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return records.map(record => {
+    const date = new Date(String(record.timestamp || '').replace(' ', 'T'));
+    if (Number.isNaN(date.getTime())) return String(record.timestamp || '');
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
   });
 }
 
-function baseOptions(yUnit = '') {
+function tickConfig(palette, callback) {
+  return {
+    color: palette.muted,
+    maxTicksLimit: palette.compact ? 4 : 6,
+    padding: palette.compact ? 6 : 8,
+    maxRotation: 0,
+    callback,
+  };
+}
+
+function axisConfig(palette, extra = {}) {
+  return {
+    border: { display: false },
+    grid:   { color: palette.grid, drawTicks: false },
+    ticks:  tickConfig(palette),
+    ...extra,
+  };
+}
+
+function baseOptions(options = {}) {
+  const palette = chartPalette();
+  const yUnit = options.yUnit || '';
+  const legend = options.legend !== false;
+  const yCallback = options.yCallback || (value => (yUnit ? `${value} ${yUnit}` : value));
+  const scales = options.scales || {
+    x: axisConfig(palette),
+    y: axisConfig(palette, { ticks: tickConfig(palette, yCallback) }),
+  };
+
+  Chart.defaults.color = palette.muted;
+  Chart.defaults.borderColor = palette.grid;
+  Chart.defaults.font.family = "'DM Sans', sans-serif";
+  Chart.defaults.font.size = 12;
+  Chart.defaults.animation = false;
+
   return {
     responsive:          true,
     maintainAspectRatio: false,
     interaction:         { mode: 'index', intersect: false },
     plugins: {
       legend: {
-        display:  true,
+        display:  legend,
         position: 'top',
         align:    'start',
-        labels:   { usePointStyle: true, boxWidth: 8, boxHeight: 8, padding: 16 },
+        labels: {
+          usePointStyle: true,
+          boxWidth: 8,
+          boxHeight: 8,
+          padding: palette.compact ? 12 : 16,
+          color: palette.muted,
+        },
       },
       tooltip: {
-        ...TOOLTIP_BASE,
+        backgroundColor: palette.text,
+        borderWidth:     0,
+        padding:         10,
+        titleColor:      palette.surface,
+        bodyColor:       palette.surface,
+        displayColors:   true,
+        cornerRadius:    12,
         callbacks: {
-          label: ctx =>
-            `${ctx.dataset.label}: ${ctx.parsed.y}${yUnit ? ` ${yUnit}` : ''}`,
+          label: context => {
+            const suffix = yUnit ? ` ${yUnit}` : '';
+            return `${context.dataset.label}: ${context.parsed.y}${suffix}`;
+          },
         },
       },
     },
-    scales: {
-      x: AXIS,
-      y: { ...AXIS, ticks: TICKS },
-    },
+    scales,
   };
 }
 
@@ -87,87 +140,121 @@ function buildChart(canvasId, config) {
     CHARTS[canvasId].destroy();
     delete CHARTS[canvasId];
   }
+
   const canvas = document.getElementById(canvasId);
   if (!canvas) return null;
+
   CHARTS[canvasId] = new Chart(canvas.getContext('2d'), config);
   return CHARTS[canvasId];
 }
 
-// ── Chart builders ─────────────────────────────────────────────
 function buildChartPM(records) {
+  const palette = chartPalette();
   buildChart('chartPM', {
     type: 'line',
     data: {
-      labels:   timeLabels(records),
+      labels: timeLabels(records),
       datasets: [
-        lineDataset('PM2.5', records.map(r => r.pm25), '#2563eb'),
-        lineDataset('PM10',  records.map(r => r.pm10), '#94a3b8'),
+        lineDataset('PM2.5', records.map(record => record.pm25), palette.pm25),
+        lineDataset('PM10', records.map(record => record.pm10), palette.pm10),
       ],
     },
-    options: baseOptions('ug/m3'),
-  });
-}
-
-function buildChartTempHum(records) {
-  buildChart('chartTempHum', {
-    type: 'line',
-    data: {
-      labels:   timeLabels(records),
-      datasets: [
-        lineDataset('Temperature', records.map(r => r.temperature), '#dc2626'),
-        lineDataset('Humidity',    records.map(r => r.humidity),    '#0f766e'),
-      ],
-    },
-    options: baseOptions(),
+    options: baseOptions({ yUnit: 'ug/m3' }),
   });
 }
 
 function buildChartCO2(records) {
+  const palette = chartPalette();
   buildChart('chartCO2', {
     type: 'line',
     data: {
-      labels:   timeLabels(records),
+      labels: timeLabels(records),
       datasets: [
-        lineDataset('CO2', records.map(r => r.co2), '#d97706'),
+        lineDataset('CO2', records.map(record => record.co2), palette.co2),
       ],
     },
-    options: baseOptions('ppm'),
+    options: baseOptions({ yUnit: 'ppm' }),
+  });
+}
+
+function buildChartTempHum(records) {
+  const palette = chartPalette();
+  buildChart('chartTempHum', {
+    type: 'line',
+    data: {
+      labels: timeLabels(records),
+      datasets: [
+        lineDataset('Temperature', records.map(record => record.temperature), palette.temperature, { yAxisID: 'yTemp' }),
+        lineDataset('Humidity', records.map(record => record.humidity), palette.humidity, { yAxisID: 'yHum' }),
+      ],
+    },
+    options: baseOptions({
+      scales: {
+        x: axisConfig(palette),
+        yTemp: axisConfig(palette, {
+          position: 'left',
+          ticks: tickConfig(palette, value => `${value} C`),
+        }),
+        yHum: axisConfig(palette, {
+          position: 'right',
+          grid: { display: false },
+          ticks: tickConfig(palette, value => `${value}%`),
+        }),
+      },
+    }),
   });
 }
 
 function buildChartElec(records) {
+  const palette = chartPalette();
   buildChart('chartElec', {
     type: 'line',
     data: {
-      labels:   timeLabels(records),
+      labels: timeLabels(records),
       datasets: [
-        lineDataset('Voltage', records.map(r => r.voltage), '#2563eb', { yAxisID: 'yV' }),
-        lineDataset('Current', records.map(r => r.current), '#0f766e', { yAxisID: 'yI' }),
-        lineDataset('Power',   records.map(r => r.power),   '#d97706', { yAxisID: 'yP' }),
+        lineDataset('Voltage', records.map(record => record.voltage), palette.voltage, { yAxisID: 'yVolt' }),
+        lineDataset('Current', records.map(record => record.current), palette.current, { yAxisID: 'yCurrent' }),
       ],
     },
-    options: {
-      ...baseOptions(),
+    options: baseOptions({
       scales: {
-        x:  AXIS,
-        yV: { ...AXIS, position: 'left',  ticks: { ...TICKS, callback: v => `${v}V` } },
-        yI: {
-          ...AXIS,
+        x: axisConfig(palette),
+        yVolt: axisConfig(palette, {
+          position: 'left',
+          ticks: tickConfig(palette, value => `${value}V`),
+        }),
+        yCurrent: axisConfig(palette, {
           position: 'right',
           grid: { display: false },
-          ticks: { ...TICKS, callback: v => `${v}A` },
-        },
-        yP: { display: false },
+          ticks: tickConfig(palette, value => `${value}A`),
+        }),
       },
-    },
+    }),
   });
 }
 
-// ── Public API ─────────────────────────────────────────────────
+function buildChartPower(records) {
+  const palette = chartPalette();
+  buildChart('chartPower', {
+    type: 'line',
+    data: {
+      labels: timeLabels(records),
+      datasets: [
+        lineDataset('Power', records.map(record => record.power), palette.power, {
+          fill: true,
+          backgroundColor: colorWithAlpha(palette.power, 0.14),
+        }),
+      ],
+    },
+    options: baseOptions({ yUnit: 'W' }),
+  });
+}
+
 function initAllCharts(records) {
   if (!Array.isArray(records) || !records.length) return;
   buildChartPM(records);
-  buildChartTempHum(records);
   buildChartCO2(records);
+  buildChartTempHum(records);
   buildChartElec(records);
+  buildChartPower(records);
 }
